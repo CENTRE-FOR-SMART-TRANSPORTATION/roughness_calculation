@@ -1,0 +1,107 @@
+chhabr1@BASYOUNY-GD08:~/Desktop/Projects/Roughness$ python roughness.py 
+Enter the start point: [709655.119271, 5648717.076043, 1019.693002]
+Enter the end point: [709654.937500, 5648695.00000, 1018.645020]
+Start point: [709655.119271, 5648717.076043, 1019.693002]
+End point: [709654.9375, 5648695.0, 1018.64502]
+Total points: 1127848
+Filtered points: 3179
+Filtered point cloud data saved to filtered_point_cloud.txt
+solid-line_1: 26
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.14674999995622784
+Segment length: 0.14674999995622784 m
+Starting position: 709654.89225 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09654892e+05, 7.09655039e+05, 9.16457877e-01, 9.65589867e-01]]), False)
+shoulder_2: 564
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.2890014599543065
+Segment length: 0.2890014599543065 m
+Starting position: 709654.86102295 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09654861e+05, 7.09655150e+05, 2.20470659e+02, 6.78001039e+02]]), False)
+solid-line_3: 26
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.14674999995622784
+Segment length: 0.14674999995622784 m
+Starting position: 709654.89225 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09654892e+05, 7.09655039e+05, 9.16457877e-01, 9.65589867e-01]]), False)
+shoulder_4: 564
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.2890014599543065
+Segment length: 0.2890014599543065 m
+Starting position: 709654.86102295 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09654861e+05, 7.09655150e+05, 2.20470659e+02, 6.78001039e+02]]), False)
+broken-line_5: 26
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.15148925001267344
+Segment length: 0.15148925001267344 m
+Starting position: 709654.91775513 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09654918e+05, 7.09655069e+05, 4.47838488e-01, 1.01340820e+00]]), False)
+lane_6: 1918
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.23950195009820163
+Segment length: 0.23950195009820163 m
+Starting position: 709654.88647461 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09654886e+05, 7.09655126e+05, 1.86809699e+01, 4.69267428e+01]]), False)
+solid-line_7: 4
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.09599304001312703
+Segment length: 0.09599304001312703 m
+Starting position: 709655.03450012 m
+Method: 2
+Number of segments: 1
+IRI: (array([[7.09655035e+05, 7.09655130e+05, 1.25097977e-01, 1.16757657e-01]]), False)
+vegetation_8: 51
+========================================
+IRI computation
+----------------------------------------
+Data are not equidistant (tolerance 1e-5).
+0.18475000001490116
+Segment length: 0.18475000001490116 m
+Starting position: 709655.027 m
+Method: 2
+Number of segments: 0
+Traceback (most recent call last):
+  File "roughness.py", line 282, in <module>
+    main()
+  File "roughness.py", line 273, in main
+    iri_value = calculate_iri(classified_points[point])
+  File "roughness.py", line 211, in calculate_iri
+    iri_value = iri(data_cleaned,segment_length,data[0,0],0)
+  File "/home/jchhabr1/Desktop/Projects/Roughness/iri.py", line 416, in iri
+    DD = np.zeros(end_si[-1] - start_si[0] + 1)
+IndexError: index -1 is out of bounds for axis 0 with size 0
+(point-classification) (base) jchhabr1@BASYOUNY-GD08:~/Desktop/Projects/Roughness$ 
+ *  History restored 
