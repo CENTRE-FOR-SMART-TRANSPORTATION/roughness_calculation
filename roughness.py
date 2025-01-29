@@ -34,6 +34,67 @@ MAPPED_LABEL_IDX = {
     "light-pole": 10,
     "clutter": 11,
 }
+def orient_point_cloud(file_path, point1, point2, output_prefix="oriented_"):
+    data = np.loadtxt(file_path)
+    coords = data[:, :3]  # Extract x, y, z
+    rgb = data[:, 3:]     # Extract r, g, b
+
+    # Convert input points to numpy arrays
+    p1 = np.array(point1)
+    p2 = np.array(point2)
+
+    # Compute the new x-axis
+    v_x = p2 - p1
+    v_x = v_x / np.linalg.norm(v_x)  # Normalize
+
+    print("\n[DEBUG] New x-axis (v_x):", v_x)
+
+    # Choose a temporary vector for the cross product (must not be parallel to v_x)
+    v_t = np.array([0, 0, 1])  # Arbitrary vector
+    if np.allclose(np.abs(v_x), np.abs(v_t)):  # Ensure v_t is not parallel
+        v_t = np.array([0, 1, 0])
+
+    # Compute the new y-axis (v_y)
+    v_y = np.cross(v_t, v_x)
+    v_y = v_y / np.linalg.norm(v_y)  # Normalize
+
+    # Compute the new z-axis (v_z)
+    v_z = np.cross(v_x, v_y)
+    v_z = v_z / np.linalg.norm(v_z)  # Normalize
+
+    print("\n[DEBUG] New y-axis (v_y):", v_y)
+    print("\n[DEBUG] New z-axis (v_z):", v_z)
+
+    # Create the rotation matrix
+    R = np.vstack([v_x, v_y, v_z]).T  # Columns are the new basis vectors
+
+    print("\n[DEBUG] Rotation matrix:\n", R)
+
+    # Translate the point cloud so that p1 becomes the origin
+    translated_coords = coords - p1
+
+    # Debug: Check translation correctness
+    print("\n[DEBUG] Translated point 1 (should be 0,0,0):", translated_coords[0])
+
+    # Rotate the translated point cloud
+    oriented_coords = np.dot(translated_coords, R)
+
+    # Combine oriented coordinates with RGB
+    oriented_data = np.hstack([oriented_coords, rgb])
+
+    
+
+    # Compute transformed points
+    p1_translated = p1 - p1  # Always [0, 0, 0] after translation
+    p2_translated = p2 - p1
+    p1_rotated = np.dot(R, p1_translated)
+    p2_rotated = np.dot(R, p2_translated)
+
+    # Debug output for transformed points
+    print("\n[DEBUG] Transformed Point 1:", p1_rotated)
+    print("\n[DEBUG] Transformed Point 2:", p2_rotated)
+
+    return oriented_data, p1_rotated, p2_rotated
 
 
 # Normalization functions
@@ -90,33 +151,26 @@ def label_points_by_color(points_rgb, COLOR_VALUES):
 
 
 # Extract points based on start and end coordinate
-def interpolate_start_end(start_point, end_point, num=500):
-    """Interpolates between the start and end points."""
-    x_start, y_start, z_start = start_point
-    x_end, y_end, z_end = end_point
-    x = np.linspace(x_start, x_end, num=num)
-    y = np.linspace(y_start, y_end, num=num)
-    # z = np.linspace(z_start, z_end, num=num)
-    # save_point_cloud(np.stack((x, y), axis=-1), "interpolated_points.txt")
-    return np.stack((x, y), axis=-1)
+# def interpolate_start_end(start_point, end_point, num=500):
+#     """Interpolates between the start and end points."""
+#     x_start, y_start, z_start = start_point
+#     x_end, y_end, z_end = end_point
+#     x = np.linspace(x_start, x_end, num=num)
+#     y = np.linspace(y_start, y_end, num=num)
+#     # z = np.linspace(z_start, z_end, num=num)
+#     # save_point_cloud(np.stack((x, y), axis=-1), "interpolated_points.txt")
+#     return np.stack((x, y), axis=-1)
 
 
-def get_points(points, start_point, end_point, threshold=0.05, batch_size=10000):
-    """
-    Filters points between the start and end points using normalization on the fly
-    to handle large files.
+def get_points(points, start_point, end_point, threshold=1, batch_size=10000):
+    
+    start_point = np.array(start_point)
+    end_point = np.array(end_point)
 
-    Args:
-        points (np.ndarray): Array of points with shape (N, M), where the first three columns are x, y, z coordinates.
-        start_point (tuple): Start point (x, y, z).
-        end_point (tuple): End point (x, y, z).
-        threshold (float): Maximum distance to consider a point close to the line.
-        batch_size (int): Number of points to process in one batch.
+    # Vector representation of the line segment
+    line_vector = end_point[:2] - start_point[:2]
+    line_length_squared = np.dot(line_vector, line_vector)
 
-    Returns:
-        np.ndarray: Filtered points close to the interpolated line.
-    """
-    interpolated_points = interpolate_start_end(start_point, end_point)
     filtered_points = []
 
     num_points = points.shape[0]
@@ -125,16 +179,30 @@ def get_points(points, start_point, end_point, threshold=0.05, batch_size=10000)
         # Process points in batches
         batch_points = points[i : i + batch_size]
 
-        # Calculate distances for the batch
-        distances = np.linalg.norm(
-            batch_points[:, :2][:, None, :] - interpolated_points[None, :, :],
-            axis=2,
-        )
-        # Identify points in the batch with at least one distance below the threshold
-        mask = np.any(distances <= threshold, axis=1)
+        # Calculate the vector from start_point to the batch points
+        point_vectors = batch_points[:, :2] - start_point[:2]
+
+        # Project the points onto the line (dot product)
+        t = np.dot(point_vectors, line_vector) / line_length_squared
+
+        # Clamp t to the range [0, 1] to ensure projections stay on the line segment
+        t = np.clip(t, 0, 1)
+
+        # Compute the closest points on the line segment
+        projections = start_point[:2] + t[:, None] * line_vector
+
+        # Calculate distances from the original points to the projections
+        distances = np.linalg.norm(batch_points[:, :2] - projections, axis=1)
+
+        # Identify points within the threshold distance
+        mask = distances <= threshold
+
+        # Adjust y-coordinate of the filtered points
+        batch_points_filtered = batch_points[mask]
+        batch_points_filtered[:, 1] = 0  # Set y = 0
 
         # Append the filtered points
-        filtered_points.append(batch_points[mask])
+        filtered_points.append(batch_points_filtered)
 
     # Concatenate results from all batches
     return np.concatenate(filtered_points, axis=0)
@@ -272,26 +340,32 @@ def main():
         print(f"Failed to load data from {file_path}")
         return
 
-    start_point = ast.literal_eval(input("Enter the start point: "))
-    end_point = ast.literal_eval(input("Enter the end point: "))
+    # start_point = ast.literal_eval(input("Enter the start point: "))
+    # end_point = ast.literal_eval(input("Enter the end point: "))
+    # start_point = [709676.562500, 5648699.000000, 1018.541992]
+    # end_point =[709629.062500, 5648710.500000, 1019.014526]
+
+    start_point =   [709627.33624268, 5648709.33099365, 1018.97027588] 
+    end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
+
+
+    # start_point = [709655.119271, 5648717.076043, 1019.693002] 
+    # end_point = [709654.937500, 5648695.00000, 1018.645020]
     print(f"Start point: {start_point}")
     print(f"End point: {end_point}")
     print(f"Total points: {len(data)}")
 
-    # Filter points within the bounding box
-    filtered_points = get_points(data, start_point, end_point, 0.08)
-    print(f"Filtered points: {len(filtered_points)}")
 
-    # classification = classify_points(data)
+    # # classification = classify_points(data)
 
-    # Save the filtered point cloud data
-    output_file = "filtered_point_cloud.txt"
-    save_point_cloud(filtered_points, output_file)
+    # # Save the filtered point cloud data
+    # output_file = "filtered_point_cloud.txt"
+    # save_point_cloud(filtered_points, output_file)
 
-    # Calculate IRI
-    classified_points = classify_points(filtered_points)
-    for point in classified_points:
-        pp.pprint(f"{point}: {classified_points[point]}")
+    # # Calculate IRI
+    # classified_points = classify_points(filtered_points)
+    # for point in classified_points:
+    #     pp.pprint(f"{point}: {classified_points[point]}")
         # iri_value = calculate_iri(classified_points[point])
         # print(f"IRI: {iri_value}")
 
@@ -299,6 +373,30 @@ def main():
     # save_point_cloud(classified_points["lane_bl_arr"], "lane_bl_arr.txt")
     # save_point_cloud(classified_points["shoulder_sl"], "shoulder_sl.txt")
 
+
+
+    # orienting the data by defining a new x axis 
+    oriented_data, start_point, end_point = orient_point_cloud(file_path, start_point, end_point)
+    print(oriented_data)
+
+    # save as txt? (optional)
+    output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
+    np.savetxt(output_file, oriented_data, fmt="%.6f")
+
+    # now, we can filter points
+    filtered_points = get_points(oriented_data, start_point, end_point)
+    print(f"Filtered points: {len(filtered_points)}")
+    output_file = f"{'newpoints_'}{file_path.split('/')[-1]}"
+    np.savetxt(output_file, filtered_points, fmt="%.6f")
+
+
+    # classifying the points
+    classified_points = classify_points(filtered_points)
+
+    for point in classified_points:
+        pp.pprint(f"{point}: {classified_points[point]}")
+        iri_value = calculate_iri(classified_points[point])
+        print(f"IRI: {iri_value}")
 
 if __name__ == "__main__":
     main()
