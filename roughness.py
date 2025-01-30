@@ -4,6 +4,7 @@ from iri import iri
 import pprint as pp
 import os
 import ast
+import open3d as o3d
 
 COLOR_LABELS = {
     0: ("lane", [255, 255, 255]),  # White for lanes
@@ -34,6 +35,8 @@ MAPPED_LABEL_IDX = {
     "light-pole": 10,
     "clutter": 11,
 }
+
+
 def orient_point_cloud(file_path, point1, point2, output_prefix="oriented_"):
     data = np.loadtxt(file_path)
     coords = data[:, :3]  # Extract x, y, z
@@ -62,19 +65,19 @@ def orient_point_cloud(file_path, point1, point2, output_prefix="oriented_"):
     v_z = np.cross(v_x, v_y)
     v_z = v_z / np.linalg.norm(v_z)  # Normalize
 
-    print("\n[DEBUG] New y-axis (v_y):", v_y)
-    print("\n[DEBUG] New z-axis (v_z):", v_z)
+    # print("\n[DEBUG] New y-axis (v_y):", v_y)
+    # print("\n[DEBUG] New z-axis (v_z):", v_z)
 
     # Create the rotation matrix
     R = np.vstack([v_x, v_y, v_z]).T  # Columns are the new basis vectors
 
-    print("\n[DEBUG] Rotation matrix:\n", R)
+    # print("\n[DEBUG] Rotation matrix:\n", R)
 
     # Translate the point cloud so that p1 becomes the origin
     translated_coords = coords - p1
 
     # Debug: Check translation correctness
-    print("\n[DEBUG] Translated point 1 (should be 0,0,0):", translated_coords[0])
+    # print("\n[DEBUG] Translated point 1 (should be 0,0,0):", translated_coords[0])
 
     # Rotate the translated point cloud
     oriented_coords = np.dot(translated_coords, R)
@@ -82,13 +85,11 @@ def orient_point_cloud(file_path, point1, point2, output_prefix="oriented_"):
     # Combine oriented coordinates with RGB
     oriented_data = np.hstack([oriented_coords, rgb])
 
-    
-
     # Compute transformed points
     p1_translated = p1 - p1  # Always [0, 0, 0] after translation
     p2_translated = p2 - p1
     p1_rotated = np.dot(R, p1_translated)
-    p2_rotated = np.dot(R, p2_translated)
+    p2_rotated = np.dot(R.T, p2_translated)
 
     # Debug output for transformed points
     print("\n[DEBUG] Transformed Point 1:", p1_rotated)
@@ -162,7 +163,7 @@ def label_points_by_color(points_rgb, COLOR_VALUES):
 #     return np.stack((x, y), axis=-1)
 
 
-def get_points(points, start_point, end_point, threshold=1, batch_size=10000):
+def get_points(points, start_point, end_point, threshold=0.025, batch_size=10000):
     
     start_point = np.array(start_point)
     end_point = np.array(end_point)
@@ -208,7 +209,6 @@ def get_points(points, start_point, end_point, threshold=1, batch_size=10000):
     return np.concatenate(filtered_points, axis=0)
 
 
-# Extract points based on labels
 def classify_points(data) -> dict:
     """
     Classifies the points based on the color labels.
@@ -216,9 +216,13 @@ def classify_points(data) -> dict:
     shoulder - solid line
     """
 
+    LANE_GROUP = {"lane", "broken-line", "arrows"}  # Keep these together
+    SHOULDER_GROUP = {"shoulder", "solid-line"}  # Keep these together
+
     classified_points = {}
     current_group = []
     current_class_label = None
+    group_counter = 1  # Used to give unique group names
 
     # Iterate through the data
     for i, point in enumerate(data):
@@ -227,9 +231,10 @@ def classify_points(data) -> dict:
         label_name = None
 
         # Find the label name corresponding to the color
-        for key, (mapped_label, mapped_color) in COLOR_LABELS.items():
+        for key, mapped_idx in MAPPED_LABEL_IDX.items():
+            mapped_color = COLOR_LABELS[mapped_idx][1]
             if color == tuple(mapped_color):
-                label_name = mapped_label
+                label_name = key
                 break
 
         # If label_name is not found, skip the point
@@ -237,47 +242,27 @@ def classify_points(data) -> dict:
             continue
 
         # Check if we are still in the same group
-        if label_name == current_class_label:
+        if ((label_name == current_class_label) or 
+            (label_name in LANE_GROUP and current_class_label in LANE_GROUP) or
+            (label_name in SHOULDER_GROUP and current_class_label in SHOULDER_GROUP)):
+        
             current_group.append(point)
         else:
-            # If we are switching groups, process the current group
+
+            # If we are switching groups, save the current group
             if current_group:
-                current_group = np.array(current_group)
-
-                # Calculate the length of the group
-                group_length = np.max(current_group[:, 0]) - np.min(current_group[:, 0])
-
-                # Add the group to the classified points
-                if current_class_label in classified_points:
-                    classified_points[current_class_label]["points"] = np.vstack(
-                        (classified_points[current_class_label]["points"], current_group)
-                    )
-                    classified_points[current_class_label]["length"] += group_length
-                else:
-                    classified_points[current_class_label] = {
-                        "points": current_group,
-                        "length": group_length,
-                    }
+                group_name = f"{current_class_label}_{group_counter}"
+                classified_points[group_name] = np.array(current_group)
+                group_counter += 1
 
             # Start a new group
             current_class_label = label_name
             current_group = [point]
 
-    # Process the last group
+    # Save the last group
     if current_group:
-        current_group = np.array(current_group)
-        group_length = np.max(current_group[:, 0]) - np.min(current_group[:, 0])
-
-        if current_class_label in classified_points:
-            classified_points[current_class_label]["points"] = np.vstack(
-                (classified_points[current_class_label]["points"], current_group)
-            )
-            classified_points[current_class_label]["length"] += group_length
-        else:
-            classified_points[current_class_label] = {
-                "points": current_group,
-                "length": group_length,
-            }
+        group_name = f"{current_class_label}_{group_counter}"
+        classified_points[group_name] = np.array(current_group)
 
     return classified_points
 
@@ -298,7 +283,7 @@ def calculate_iri(data):
     # come up with a better strategy for this
     segment_length = np.max(x_coords) - np.min(x_coords)
 
-    iri_value = iri(data_cleaned,segment_length,data[0,0],0)
+    iri_value = iri(data_cleaned,segment_length,-1,5)
 
     return iri_value
 
@@ -342,42 +327,21 @@ def main():
 
     # start_point = ast.literal_eval(input("Enter the start point: "))
     # end_point = ast.literal_eval(input("Enter the end point: "))
-    # start_point = [709676.562500, 5648699.000000, 1018.541992]
-    # end_point =[709629.062500, 5648710.500000, 1019.014526]
+    start_point = [709676.562500, 5648699.000000, 1018.541992]
+    end_point =[709629.062500, 5648710.500000, 1019.014526]
 
-    start_point =   [709627.33624268, 5648709.33099365, 1018.97027588] 
-    end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
+    # start_point =   [709627.33624268, 5648709.33099365, 1018.97027588] 
+    # end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
 
-
+    # # # vertical
     # start_point = [709655.119271, 5648717.076043, 1019.693002] 
     # end_point = [709654.937500, 5648695.00000, 1018.645020]
-    print(f"Start point: {start_point}")
-    print(f"End point: {end_point}")
-    print(f"Total points: {len(data)}")
-
-
-    # # classification = classify_points(data)
-
-    # # Save the filtered point cloud data
-    # output_file = "filtered_point_cloud.txt"
-    # save_point_cloud(filtered_points, output_file)
-
-    # # Calculate IRI
-    # classified_points = classify_points(filtered_points)
-    # for point in classified_points:
-    #     pp.pprint(f"{point}: {classified_points[point]}")
-        # iri_value = calculate_iri(classified_points[point])
-        # print(f"IRI: {iri_value}")
-
-    # print(f"IRI: {iri_value}")
-    # save_point_cloud(classified_points["lane_bl_arr"], "lane_bl_arr.txt")
-    # save_point_cloud(classified_points["shoulder_sl"], "shoulder_sl.txt")
-
-
-
+    
     # orienting the data by defining a new x axis 
     oriented_data, start_point, end_point = orient_point_cloud(file_path, start_point, end_point)
-    print(oriented_data)
+    print("start end ", start_point, end_point)
+
+    # print(oriented_data)
 
     # save as txt? (optional)
     output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
@@ -385,18 +349,26 @@ def main():
 
     # now, we can filter points
     filtered_points = get_points(oriented_data, start_point, end_point)
-    print(f"Filtered points: {len(filtered_points)}")
     output_file = f"{'newpoints_'}{file_path.split('/')[-1]}"
     np.savetxt(output_file, filtered_points, fmt="%.6f")
-
+    print()
+    print("[Total number of filtered points]",len(filtered_points))
+    print()
 
     # classifying the points
     classified_points = classify_points(filtered_points)
+    # pp.pprint(f"{point}: {classified_points[point]}")
 
-    for point in classified_points:
-        pp.pprint(f"{point}: {classified_points[point]}")
-        iri_value = calculate_iri(classified_points[point])
+    for label, data in classified_points.items():
+        num_points = len(data) # Get the number of rows in the NumPy array
+        print(f"{label}: {num_points} points")
+
+        np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
+
+
+        iri_value = calculate_iri(data)
         print(f"IRI: {iri_value}")
+        #pp.pprint(data)
 
 if __name__ == "__main__":
     main()
