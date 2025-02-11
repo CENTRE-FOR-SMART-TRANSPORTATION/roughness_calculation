@@ -26,7 +26,8 @@ class PointCloudApp:
         self._scene.scene.set_background(np.asarray([52, 52, 52, 255]) / 255)
         self._scene.set_on_mouse(self.on_mouse_down)
         self._em = w.theme.font_size
-        
+        self.geometries = {}
+
         # Load point cloud
         self.point_cloud = o3d.geometry.PointCloud()
 
@@ -86,26 +87,43 @@ class PointCloudApp:
             self._selected_points = []
 
             points = self.convert_to_numpy(self.point_cloud)
-            filtered_points = r.get_points(points, start_point, end_point, 0.05)
+            oriented, start_point, end_point = r.orient_point_cloud(
+                points, start_point, end_point
+            )
+            # filtered_pcd = r.get_mesh_points(oriented, start_point, end_point)
+            filtered_points = r.get_points(oriented, start_point, end_point)
+            filtered_points_mesh = r.get_mesh_points(oriented, start_point, end_point)
+            print("-------------------Points-------------------")
+            self.print_iri(filtered_points)
+            print("-------------------Mesh-------------------")
+            self.print_iri(filtered_points_mesh)
+
             filtered_pcd = self.convert_to_open3d(filtered_points)
+            filtered_pcd_mesh = self.convert_to_open3d(filtered_points_mesh)
             print(filtered_points.shape)
-            filtered_pcd.paint_uniform_color([1, 0, 0])  # Red color
-            
+            print(filtered_points_mesh.shape)
 
-            if filtered_pcd is not None:
-                self._scene.scene.remove_geometry("Filtered Point Cloud")
-                self._scene.scene.add_geometry(
-                    "Filtered Point Cloud",
-                    filtered_pcd,
-                    rendering.MaterialRecord(),  # rendering.MaterialRecord()
-                )
-                bounds = self._scene.scene.bounding_box
-                self._scene.setup_camera(60, bounds, bounds.get_center())
-                print("Filtered point cloud added to the scene.")
-                # visualize_point_cloud(filtered_pcd)
-                save_point_cloud_to_txt(filtered_pcd, "save.txt")
+            self.point_cloud = self.convert_to_open3d(oriented)
+            self.clear_geometries()
+            self.add_geometry("PointCloud", self.point_cloud)
+            self.add_geometry("FilteredPointCloud", filtered_pcd)
+            self.add_geometry("FilteredPointCloudMesh", filtered_pcd_mesh)
+            save_point_cloud_to_txt(filtered_pcd, "filtered_line_pcd")
+            save_point_cloud_to_txt(filtered_pcd_mesh, "filtered_line_pcd_mesh")
 
-    # def setup_buttons(self):
+    def print_iri(self, points):
+        classified_points = r.classify_points(points)
+
+        for label, data in classified_points.items():
+            num_points = len(data)  # Get the number of rows in the NumPy array
+            print(f"{label}: {num_points} points")
+
+            np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
+
+            iri_value = r.calculate_iri(data)
+            print(f"IRI: {iri_value}")
+
+    #   def setup_buttons(self):
     #     layout = gui.VGrid(2, 0.25 * self.em)
 
     #     # Button for loading a new point cloud
@@ -118,7 +136,8 @@ class PointCloudApp:
     def convert_to_open3d(self, points):
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points[:, :3])
-        pcd.colors = o3d.utility.Vector3dVector(points[:, 3:6] / 255)
+        if points.shape[1] == 6:
+            pcd.colors = o3d.utility.Vector3dVector(points[:, 3:] / 255)
         return pcd
 
     def convert_to_numpy(self, pcd):
@@ -201,19 +220,12 @@ class PointCloudApp:
             new_pcd = r.read_txt_with_rgb(path)
             new_pcd = r.normalize_point_cloud_data(new_pcd)
             self.point_cloud = self.convert_to_open3d(new_pcd)
+            # self.point_cloud, self.mesh = r.get_mesh_points(new_pcd)
         else:
             new_pcd = o3d.io.read_point_cloud(path)
             self.point_cloud = new_pcd
 
-        if self.point_cloud is not None:
-            # Point cloud
-            self._scene.scene.add_geometry(
-                "Point Cloud",
-                self.point_cloud,
-                rendering.MaterialRecord(),  # rendering.MaterialRecord()
-            )
-            bounds = self._scene.scene.bounding_box
-            self._scene.setup_camera(60, bounds, bounds.get_center())
+        self.add_geometry("PointCloud", self.point_cloud)
 
     def export_image(self, path, width, height):
 
@@ -277,6 +289,38 @@ class PointCloudApp:
             return gui.Widget.EventCallbackResult.HANDLED
         return gui.Widget.EventCallbackResult.IGNORED
 
+    def add_geometry(self, name: str, geometry) -> None:
+        if name not in self.geometries and geometry is not None:
+            self.geometries[name] = geometry
+            self._scene.scene.add_geometry(
+                name,
+                geometry,
+                rendering.MaterialRecord(),  # rendering.MaterialRecord()
+            )
+            bounds = self._scene.scene.bounding_box
+            self._scene.setup_camera(60, bounds, bounds.get_center())
+        else:
+            self.update_geometry(name, geometry)
+
+    def clear_geometries(self):
+        self._scene.scene.clear_geometry()
+        self.geometries = {}
+
+    def update_geometry(self, name: str, geometry: o3d.geometry.Geometry):
+        if name in self.geometries and geometry is not None:
+            self.geometries[name] = geometry
+            self._scene.scene.remove_geometry(name)
+            self._scene.scene.add_geometry(
+                name,
+                geometry,
+                rendering.MaterialRecord(),  # rendering.MaterialRecord()
+            )
+            bounds = self._scene.scene.bounding_box
+            self._scene.setup_camera(60, bounds, bounds.get_center())
+        else:
+            self.add_geometry(name, geometry)
+
+
 def visualize_point_cloud(point_cloud):
     """
     Opens a new window to visualize the given point cloud.
@@ -293,15 +337,17 @@ def visualize_point_cloud(point_cloud):
         return
 
     # Visualize the point cloud
-    o3d.visualization.draw_geometries([point_cloud],
-                                      window_name="Point Cloud Visualization",
-                                      width=800,
-                                      height=600,
-                                      left=50,
-                                      top=50,
-                                      point_show_normal=False,
-                                      mesh_show_wireframe=False,
-                                      mesh_show_back_face=False)
+    o3d.visualization.draw_geometries(
+        [point_cloud],
+        window_name="Point Cloud Visualization",
+        width=800,
+        height=600,
+        left=50,
+        top=50,
+        point_show_normal=False,
+        mesh_show_wireframe=False,
+        mesh_show_back_face=False,
+    )
 
 
 def save_point_cloud_to_txt(point_cloud, file_name):
@@ -312,20 +358,19 @@ def save_point_cloud_to_txt(point_cloud, file_name):
         point_cloud: An open3d.geometry.PointCloud or open3d.cuda.pybind.geometry.PointCloud object.
         file_name: The name of the .txt file to save the points.
     """
-    if not isinstance(point_cloud, (o3d.geometry.PointCloud, o3d.cuda.pybind.geometry.PointCloud)):
-        raise TypeError("The provided object is not a valid Open3D PointCloud.")
+    # if not isinstance(
+    #     point_cloud, (o3d.geometry.PointCloud, o3d.cuda.pybind.geometry.PointCloud)
+    # ):
+    #     raise TypeError("The provided object is not a valid Open3D PointCloud.")
 
     # Extract points as a numpy array
-    points = np.asarray(point_cloud.points)
-    
-    # Check if points are empty
-    if points.size == 0:
-        print("Point cloud is empty. No points to save.")
-        return
+    if isinstance(point_cloud, o3d.t.geometry.PointCloud):
+        o3d.t.io.write_point_cloud(f"{file_name}.ply", point_cloud, write_ascii=True)
+    else:
+        o3d.io.write_point_cloud(f"{file_name}.ply", point_cloud, write_ascii=True)
 
-    # Save the points to a .txt file
-    np.savetxt(file_name, points, fmt="%.6f", delimiter=" ", header="x y z", comments="")
-    print(f"Saved {len(points)} points to {file_name}.")
+    print(f"Saved {file_name}.")
+
 
 if __name__ == "__main__":
     gui.Application.instance.initialize()

@@ -5,6 +5,8 @@ import pprint as pp
 import os
 import ast
 import open3d as o3d
+from scipy.spatial import Delaunay
+
 
 COLOR_LABELS = {
     0: ("lane", [255, 255, 255]),  # White for lanes
@@ -37,10 +39,12 @@ MAPPED_LABEL_IDX = {
 }
 
 
-def orient_point_cloud(file_path, point1, point2, output_prefix="oriented_"):
-    data = np.loadtxt(file_path)
+def orient_point_cloud(data: np.ndarray, point1, point2, output_prefix="oriented_"):
     coords = data[:, :3]  # Extract x, y, z
-    rgb = data[:, 3:]     # Extract r, g, b
+    if data.shape[1] == 3:
+        rgb = np.zeros_like(coords)
+    else:
+        rgb = data[:, 3:]  # Extract r, g, b
 
     # Convert input points to numpy arrays
     p1 = np.array(point1)
@@ -164,7 +168,7 @@ def label_points_by_color(points_rgb, COLOR_VALUES):
 
 
 def get_points(points, start_point, end_point, threshold=0.025, batch_size=10000):
-    
+
     start_point = np.array(start_point)
     end_point = np.array(end_point)
 
@@ -242,10 +246,12 @@ def classify_points(data) -> dict:
             continue
 
         # Check if we are still in the same group
-        if ((label_name == current_class_label) or 
-            (label_name in LANE_GROUP and current_class_label in LANE_GROUP) or
-            (label_name in SHOULDER_GROUP and current_class_label in SHOULDER_GROUP)):
-        
+        if (
+            (label_name == current_class_label)
+            or (label_name in LANE_GROUP and current_class_label in LANE_GROUP)
+            or (label_name in SHOULDER_GROUP and current_class_label in SHOULDER_GROUP)
+        ):
+
             current_group.append(point)
         else:
 
@@ -267,6 +273,76 @@ def classify_points(data) -> dict:
     return classified_points
 
 
+def get_mesh_points(
+    points,
+    start_point: np.ndarray,
+    end_point: np.ndarray,
+    uniform_spacing=0.1,
+):
+    """
+    Return the points at uniform spacing along a line from start_point to end_point,
+    ensuring they are interpolated on the mesh surface.
+    """
+    # Create the point cloud and mesh
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points[:, :3])
+    pcd.colors = o3d.utility.Vector3dVector(points[:, 3:6] / 255)
+
+    # Use only XY coordinates for triangulation
+    pcd_xy = np.asarray(pcd.points)[:, :2]
+    tri = Delaunay(pcd_xy)  # 2D Delaunay triangulation
+
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = pcd.points
+    mesh.triangles = o3d.utility.Vector3iVector(tri.simplices)
+    mesh.compute_vertex_normals()
+
+    # Convert mesh to tensor format
+    mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
+    mesh_vertices = mesh.vertex["positions"].numpy()
+    mesh_triangles = tri.simplices  # Triangle indices
+
+    # Compute direction and uniform spacing
+    los_direction = end_point - start_point
+    los_direction /= np.linalg.norm(los_direction)
+    distance = np.linalg.norm(end_point - start_point)
+    num_steps = int(np.floor(distance / uniform_spacing))
+
+    filtered_points = []
+
+    for i in range(num_steps):
+        p = start_point + i * uniform_spacing * los_direction
+
+        # Find which triangle contains this point
+        simplex = tri.find_simplex(p[:2])
+
+        if simplex >= 0:
+            a, b, c = mesh_vertices[mesh_triangles[simplex]]
+            # Compute Barycentric coordinates
+            v0, v1, v2 = b - a, c - a, p - a
+            d00 = np.dot(v0, v0)
+            d01 = np.dot(v0, v1)
+            d11 = np.dot(v1, v1)
+            d20 = np.dot(v2, v0)
+            d21 = np.dot(v2, v1)
+            denom = d00 * d11 - d01 * d01
+            beta = (d11 * d20 - d01 * d21) / denom
+            gamma = (d00 * d21 - d01 * d20) / denom
+            alpha = 1.0 - beta - gamma
+
+            # Compute the interpolated point on the triangle (Whats this)
+            interpolated_point = alpha * v1 + beta * v2 + gamma * v0
+            filtered_points.append(interpolated_point)
+
+    filtered_points = np.array(filtered_points)
+    filtered_points = np.hstack(
+        (filtered_points, np.full((filtered_points.shape[0], 3), 255))
+    )
+    filtered_points[:, 1] = 0
+
+    return filtered_points
+
+
 # Calculation Function
 def calculate_iri(data):
     # print(data.shape)
@@ -275,15 +351,15 @@ def calculate_iri(data):
     # iri_value, _ = iri(data[:, :2], distance[0][0], -1, 0)
     # return iri_value
 
-    data = data[:,[0,2]]
-    _,unique_indices = np.unique(data[:,0], return_index=True)
+    data = data[:, [0, 2]]
+    _, unique_indices = np.unique(data[:, 0], return_index=True)
     data_cleaned = data[unique_indices]
-    data_cleaned = data_cleaned[np.argsort(data_cleaned[:,0])]
-    x_coords = data[:,0]
+    data_cleaned = data_cleaned[np.argsort(data_cleaned[:, 0])]
+    x_coords = data[:, 0]
     # come up with a better strategy for this
     segment_length = np.max(x_coords) - np.min(x_coords)
 
-    iri_value = iri(data_cleaned,segment_length,-1,5)
+    iri_value = iri(data_cleaned, segment_length, -1, 0)
 
     return iri_value
 
@@ -328,47 +404,49 @@ def main():
     # start_point = ast.literal_eval(input("Enter the start point: "))
     # end_point = ast.literal_eval(input("Enter the end point: "))
     start_point = [709676.562500, 5648699.000000, 1018.541992]
-    end_point =[709629.062500, 5648710.500000, 1019.014526]
+    end_point = [709629.062500, 5648710.500000, 1019.014526]
 
-    # start_point =   [709627.33624268, 5648709.33099365, 1018.97027588] 
+    # start_point =   [709627.33624268, 5648709.33099365, 1018.97027588]
     # end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
 
     # # # vertical
-    # start_point = [709655.119271, 5648717.076043, 1019.693002] 
+    # start_point = [709655.119271, 5648717.076043, 1019.693002]
     # end_point = [709654.937500, 5648695.00000, 1018.645020]
-    
-    # orienting the data by defining a new x axis 
-    oriented_data, start_point, end_point = orient_point_cloud(file_path, start_point, end_point)
-    print("start end ", start_point, end_point)
 
-    # print(oriented_data)
+    # orienting the data by defining a new x axis
+    # oriented_data, start_point, end_point = orient_point_cloud(
+    #     data, start_point, end_point
+    # )
+    # print("start end ", start_point, end_point)
 
-    # save as txt? (optional)
-    output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
-    np.savetxt(output_file, oriented_data, fmt="%.6f")
+    # # print(oriented_data)
 
-    # now, we can filter points
-    filtered_points = get_points(oriented_data, start_point, end_point)
-    output_file = f"{'newpoints_'}{file_path.split('/')[-1]}"
-    np.savetxt(output_file, filtered_points, fmt="%.6f")
-    print()
-    print("[Total number of filtered points]",len(filtered_points))
-    print()
+    # # save as txt? (optional)
+    # output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
+    # np.savetxt(output_file, oriented_data, fmt="%.6f")
+
+    # # now, we can filter points
+    # filtered_points = get_points(oriented_data, start_point, end_point)
+    # output_file = f"{'newpoints_'}{file_path.split('/')[-1]}"
+    # np.savetxt(output_file, filtered_points, fmt="%.6f")
+    # print()
+    # print("[Total number of filtered points]", len(filtered_points))
+    # print()
 
     # classifying the points
     classified_points = classify_points(filtered_points)
     # pp.pprint(f"{point}: {classified_points[point]}")
 
     for label, data in classified_points.items():
-        num_points = len(data) # Get the number of rows in the NumPy array
+        num_points = len(data)  # Get the number of rows in the NumPy array
         print(f"{label}: {num_points} points")
 
         np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
 
-
         iri_value = calculate_iri(data)
         print(f"IRI: {iri_value}")
-        #pp.pprint(data)
+        # pp.pprint(data)
+
 
 if __name__ == "__main__":
     main()
