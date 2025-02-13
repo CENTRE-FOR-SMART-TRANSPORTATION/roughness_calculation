@@ -8,6 +8,7 @@ class PointCloudMeshViewer:
         self.pcd = self.load_point_cloud(filename)
         self.pcd = self.normalize(self.pcd)
         self.mesh = self.create_mesh(self.pcd)
+        self.pcd_points = self.load_filtered_point_cloud()
         self.current_mode = "pointcloud"  # Start with point cloud view
         self.vis = o3d.visualization.VisualizerWithKeyCallback()
         self.vis.create_window()
@@ -39,6 +40,24 @@ class PointCloudMeshViewer:
         pcd.points = o3d.utility.Vector3dVector(np.stack((x, y, z), axis=1))
         return pcd
 
+    def load_filtered_point_cloud(self):
+        pcd = o3d.geometry.PointCloud()
+        start_point = np.array([2.22473, 23.8685, 1019.01])
+        end_point = np.array([43.0848, 8.94177, 1018.46])
+        uniform_spacing = 0.1
+
+        los_direction = end_point - start_point
+        los_direction /= np.linalg.norm(los_direction)
+        distance = np.linalg.norm(end_point - start_point)
+        num_steps = int(np.floor(distance / uniform_spacing))
+
+        for i in range(num_steps):
+            p = start_point + i * uniform_spacing * los_direction
+            pcd.points.append(p)
+
+        pcd.paint_uniform_color([0.0, 0.0, 1.0])
+        return pcd
+
     def create_mesh(self, pcd):
         """Convert point cloud to mesh using Poisson reconstruction."""
         pcd_xy = np.asarray(pcd.points)[:, :2]
@@ -47,6 +66,7 @@ class PointCloudMeshViewer:
         mesh.vertices = pcd.points
         mesh.triangles = o3d.utility.Vector3iVector(tri.simplices)
         mesh.compute_vertex_normals()
+
         return mesh
 
     def setup_visualizer(self):
@@ -74,6 +94,7 @@ class PointCloudMeshViewer:
         print("Switching to Mesh View")
         vis.clear_geometries()
         vis.add_geometry(self.mesh)
+        vis.add_geometry(self.pcd_points)
 
 
 if __name__ == "__main__":

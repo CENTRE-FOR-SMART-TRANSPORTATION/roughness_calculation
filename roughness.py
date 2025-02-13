@@ -167,7 +167,7 @@ def label_points_by_color(points_rgb, COLOR_VALUES):
 #     return np.stack((x, y), axis=-1)
 
 
-def get_points(points, start_point, end_point, threshold=0.025, batch_size=10000):
+def get_points(points, start_point, end_point, threshold=0.25, batch_size=10000):
 
     start_point = np.array(start_point)
     end_point = np.array(end_point)
@@ -277,7 +277,7 @@ def get_mesh_points(
     points,
     start_point: np.ndarray,
     end_point: np.ndarray,
-    uniform_spacing=0.1,
+    uniform_spacing=0.05,
 ):
     """
     Return the points at uniform spacing along a line from start_point to end_point,
@@ -331,8 +331,9 @@ def get_mesh_points(
             alpha = 1.0 - beta - gamma
 
             # Compute the interpolated point on the triangle (Whats this)
-            interpolated_point = alpha * v1 + beta * v2 + gamma * v0
-            filtered_points.append(interpolated_point)
+            interpolated_point = alpha * a + beta * b + gamma * c
+            new_point = [p[0], p[1], interpolated_point[2]]
+            filtered_points.append(new_point)
 
     filtered_points = np.array(filtered_points)
     filtered_points = np.hstack(
@@ -356,8 +357,10 @@ def calculate_iri(data):
     data_cleaned = data[unique_indices]
     data_cleaned = data_cleaned[np.argsort(data_cleaned[:, 0])]
     x_coords = data[:, 0]
+    start = np.min(x_coords)
+    end = np.max(x_coords)
     # come up with a better strategy for this
-    segment_length = np.max(x_coords) - np.min(x_coords)
+    segment_length = end - start
 
     iri_value = iri(data_cleaned, segment_length, -1, 0)
 
@@ -385,6 +388,9 @@ Test Case:
     # start_point, end_point = 
     #   [709655.119271, 5648717.076043, 1019.693002], 
     #   [709654.937500, 5648695.00000, 1018.645020]
+    # start point, end point = 
+    [709627.621765, 5648712.299011,1019.054260],
+    [ 709677.142029, 5648699.590759, 1018.554016]
 """
 
 
@@ -403,38 +409,52 @@ def main():
 
     # start_point = ast.literal_eval(input("Enter the start point: "))
     # end_point = ast.literal_eval(input("Enter the end point: "))
-    start_point = [709676.562500, 5648699.000000, 1018.541992]
-    end_point = [709629.062500, 5648710.500000, 1019.014526]
+    # start_point = [709676.562500, 5648699.000000, 1018.541992]
+    # end_point = [709629.062500, 5648710.500000, 1019.014526]
 
     # start_point =   [709627.33624268, 5648709.33099365, 1018.97027588]
     # end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
+
+    start_point = [709627.621765, 5648712.299011, 1019.054260]
+    end_point = [709677.142029, 5648699.590759, 1018.554016]
 
     # # # vertical
     # start_point = [709655.119271, 5648717.076043, 1019.693002]
     # end_point = [709654.937500, 5648695.00000, 1018.645020]
 
     # orienting the data by defining a new x axis
-    # oriented_data, start_point, end_point = orient_point_cloud(
-    #     data, start_point, end_point
-    # )
-    # print("start end ", start_point, end_point)
+    oriented_data, start_point, end_point = orient_point_cloud(
+        data, start_point, end_point
+    )
+    print("start end ", start_point, end_point)
 
-    # # print(oriented_data)
+    # print(oriented_data)
 
-    # # save as txt? (optional)
+    # save as txt? (optional)
     # output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
     # np.savetxt(output_file, oriented_data, fmt="%.6f")
 
-    # # now, we can filter points
-    # filtered_points = get_points(oriented_data, start_point, end_point)
+    # now, we can filter points
+    filtered_points = get_points(oriented_data, start_point, end_point)
     # output_file = f"{'newpoints_'}{file_path.split('/')[-1]}"
-    # np.savetxt(output_file, filtered_points, fmt="%.6f")
-    # print()
-    # print("[Total number of filtered points]", len(filtered_points))
-    # print()
+    output_file = "filtered_points.txt"
+    np.savetxt(output_file, filtered_points, fmt="%.6f")
+    print()
+    print("[Total number of filtered points]", len(filtered_points))
+    print()
+
+    filtered_points_mesh = get_mesh_points(
+        oriented_data, start_point, end_point, uniform_spacing=0.05
+    )
+    output_file = "filtered_points_mesh.txt"
+    np.savetxt(output_file, filtered_points, fmt="%.6f")
+    print()
+    print("[Total number of filtered points]", len(filtered_points))
+    print()
 
     # classifying the points
     classified_points = classify_points(filtered_points)
+    classified_points_mesh = classify_points(filtered_points_mesh)
     # pp.pprint(f"{point}: {classified_points[point]}")
 
     for label, data in classified_points.items():
@@ -446,6 +466,15 @@ def main():
         iri_value = calculate_iri(data)
         print(f"IRI: {iri_value}")
         # pp.pprint(data)
+
+    for label, data in classified_points_mesh.items():
+        num_points = len(data)  # Get the number of rows in the NumPy array
+        print(f"{label}: {num_points} points")
+
+        np.savetxt(f"saved_data{label}_mesh.txt", data, fmt="%.6f")
+
+        iri_value = calculate_iri(data)
+        print(f"IRI: {iri_value}")
 
 
 if __name__ == "__main__":

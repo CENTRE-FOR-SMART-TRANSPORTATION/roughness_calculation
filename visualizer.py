@@ -220,6 +220,7 @@ class PointCloudApp:
             new_pcd = r.read_txt_with_rgb(path)
             new_pcd = r.normalize_point_cloud_data(new_pcd)
             self.point_cloud = self.convert_to_open3d(new_pcd)
+            save_point_cloud_to_txt(self.point_cloud, "loaded_pcd")
             # self.point_cloud, self.mesh = r.get_mesh_points(new_pcd)
         else:
             new_pcd = o3d.io.read_point_cloud(path)
