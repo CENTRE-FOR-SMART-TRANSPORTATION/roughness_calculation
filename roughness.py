@@ -6,6 +6,8 @@ import os
 import ast
 import open3d as o3d
 from scipy.spatial import Delaunay
+from scipy.interpolate import CubicSpline, PchipInterpolator, Akima1DInterpolator
+from scipy.ndimage import median_filter
 
 
 COLOR_LABELS = {
@@ -167,7 +169,7 @@ def label_points_by_color(points_rgb, COLOR_VALUES):
 #     return np.stack((x, y), axis=-1)
 
 
-def get_points(points, start_point, end_point, threshold=0.25, batch_size=10000):
+def get_points(points, start_point, end_point, threshold=0.025, batch_size=10000):
 
     start_point = np.array(start_point)
     end_point = np.array(end_point)
@@ -392,6 +394,57 @@ Test Case:
     [709627.621765, 5648712.299011,1019.054260],
     [ 709677.142029, 5648699.590759, 1018.554016]
 """
+def interpolate_and_save(method_name, x_sorted, z_sorted, class_labels_sorted, filename):
+        """Applies interpolation (Cubic Spline or PCHIP), assigns class labels, and saves the interpolated data."""
+        
+        print(f"---------------------- {method_name} Interpolation ----------------------")
+
+        # Generate new points at every 0.05 interval
+        x_new = np.arange(x_sorted.min(), x_sorted.max() + 0.05, 0.05)
+
+        # Apply the selected interpolation method
+        if method_name.lower() == "pchip":
+            interpolator = PchipInterpolator(x_sorted, z_sorted)
+        elif method_name.lower() == "cubicspline":
+            interpolator = CubicSpline(x_sorted, z_sorted, bc_type='clamped')
+        elif method_name.lower() == "akima":
+            interpolator = Akima1DInterpolator(x_sorted, z_sorted)
+
+        z_new = interpolator(x_new)
+
+        # if use_pchip:
+        #     # Apply median filter for smoothing (only for PCHIP)
+        # z_new = median_filter(z_new, size=3)
+
+        # # Clip extreme values
+        # z_min, z_max = z_sorted.min(), z_sorted.max()
+        # z_new = np.clip(z_new, z_min, z_max)
+
+        # Assign class labels using nearest-neighbor approach
+        indices = np.searchsorted(x_sorted, x_new, side="left")
+        indices = np.clip(indices, 0, len(x_sorted) - 1)  # Ensure indices stay within bounds
+        class_labels_new = class_labels_sorted[indices]
+
+        # Combine into a single array (x, y=0, z, class_labels)
+        interpolated_points = np.column_stack((x_new, np.zeros_like(x_new), z_new, class_labels_new))
+
+        # Save to file
+        np.savetxt(filename, interpolated_points, fmt="%.6f")
+        print(f"Saved interpolated data to {filename}")
+
+        return interpolated_points
+
+def print_iri(points):
+        classified_points = classify_points(points)
+
+        for label, data in classified_points.items():
+            num_points = len(data)  # Get the number of rows in the NumPy array
+            print(f"{label}: {num_points} points")
+
+            np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
+
+            iri_value = calculate_iri(data)
+            print(f"IRI: {iri_value}")
 
 
 def main():
@@ -456,7 +509,7 @@ def main():
     classified_points = classify_points(filtered_points)
     classified_points_mesh = classify_points(filtered_points_mesh)
     # pp.pprint(f"{point}: {classified_points[point]}")
-
+    print("---------------------- Points ----------------------")
     for label, data in classified_points.items():
         num_points = len(data)  # Get the number of rows in the NumPy array
         print(f"{label}: {num_points} points")
@@ -466,7 +519,7 @@ def main():
         iri_value = calculate_iri(data)
         print(f"IRI: {iri_value}")
         # pp.pprint(data)
-
+    print("---------------------- Mesh ----------------------")
     for label, data in classified_points_mesh.items():
         num_points = len(data)  # Get the number of rows in the NumPy array
         print(f"{label}: {num_points} points")
@@ -476,6 +529,24 @@ def main():
         iri_value = calculate_iri(data)
         print(f"IRI: {iri_value}")
 
+    x = filtered_points[:, 0]  # X coordinates
+    z = filtered_points[:, 2]  # Z coordinates
+    class_labels = filtered_points[:, 3:]  # RGB/class labels
+
+    sorted_indices = np.argsort(x)
+    x_sorted = x[sorted_indices]
+    z_sorted = z[sorted_indices]
+    class_labels_sorted = class_labels[sorted_indices]
+
+    # Apply and save Cubic Spline interpolation
+    interpolated_points_cs = interpolate_and_save("CubicSpline", x_sorted, z_sorted, class_labels_sorted, "interpolated_points.txt")
+    print_iri(interpolated_points_cs)
+
+    # Apply and save PCHIP interpolation (better for noisy data)
+    interpolated_points_pchip = interpolate_and_save("pchip", x_sorted, z_sorted, class_labels_sorted, "interpolated_points_pchip.txt")
+    print_iri(interpolated_points_pchip)
+
+    
 
 if __name__ == "__main__":
     main()
