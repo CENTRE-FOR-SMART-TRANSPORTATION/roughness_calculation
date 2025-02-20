@@ -6,6 +6,9 @@ import os
 import numpy as np
 import platform
 import sys
+from scipy.interpolate import CubicSpline, PchipInterpolator
+from scipy.ndimage import median_filter
+
 
 isMacOS = platform.system() == "Darwin"
 
@@ -92,11 +95,34 @@ class PointCloudApp:
             )
             # filtered_pcd = r.get_mesh_points(oriented, start_point, end_point)
             filtered_points = r.get_points(oriented, start_point, end_point)
+            np.savetxt(f"filtered_points.txt", filtered_points, fmt="%.6f")
             filtered_points_mesh = r.get_mesh_points(oriented, start_point, end_point)
             print("-------------------Points-------------------")
             self.print_iri(filtered_points)
             print("-------------------Mesh-------------------")
             self.print_iri(filtered_points_mesh)
+
+            # Method#3: Points + Cubic Spline
+            x = filtered_points[:, 0]  # X coordinates
+            z = filtered_points[:, 2]  # Z coordinates
+            class_labels = filtered_points[:, 3:]  # RGB/class labels
+
+            sorted_indices = np.argsort(x)
+            x_sorted = x[sorted_indices]
+            z_sorted = z[sorted_indices]
+            class_labels_sorted = class_labels[sorted_indices]
+
+            # Apply and save Cubic Spline interpolation
+            interpolated_points_cs = self.interpolate_and_save("Cubic Spline", x_sorted, z_sorted, class_labels_sorted, "interpolated_points.txt")
+
+            # Apply and save PCHIP interpolation (better for noisy data)
+            interpolated_points_pchip = self.interpolate_and_save("PCHIP", x_sorted, z_sorted, class_labels_sorted, "interpolated_points_pchip.txt", use_pchip=True)
+
+            # Print results
+            self.print_iri(interpolated_points_cs)
+            self.print_iri(interpolated_points_pchip)
+
+
 
             filtered_pcd = self.convert_to_open3d(filtered_points)
             filtered_pcd_mesh = self.convert_to_open3d(filtered_points_mesh)
@@ -132,6 +158,43 @@ class PointCloudApp:
     #     layout.add_child(load_button)
 
     #     self.window.add_child(layout)
+    def interpolate_and_save(self, method_name, x_sorted, z_sorted, class_labels_sorted, filename, use_pchip=False):
+        """Applies interpolation (Cubic Spline or PCHIP), assigns class labels, and saves the interpolated data."""
+        
+        print(f"---------------------- {method_name} Interpolation ----------------------")
+
+        # Generate new points at every 0.05 interval
+        x_new = np.arange(x_sorted.min(), x_sorted.max() + 0.05, 0.05)
+
+        # Apply the selected interpolation method
+        if use_pchip:
+            interpolator = PchipInterpolator(x_sorted, z_sorted)
+        else:
+            interpolator = CubicSpline(x_sorted, z_sorted, bc_type='natural')
+
+        z_new = interpolator(x_new)
+
+        if use_pchip:
+            # Apply median filter for smoothing (only for PCHIP)
+            z_new = median_filter(z_new, size=3)
+
+            # Clip extreme values
+            z_min, z_max = z_sorted.min(), z_sorted.max()
+            z_new = np.clip(z_new, z_min, z_max)
+
+        # Assign class labels using nearest-neighbor approach
+        indices = np.searchsorted(x_sorted, x_new, side="left")
+        indices = np.clip(indices, 0, len(x_sorted) - 1)  # Ensure indices stay within bounds
+        class_labels_new = class_labels_sorted[indices]
+
+        # Combine into a single array (x, y=0, z, class_labels)
+        interpolated_points = np.column_stack((x_new, np.zeros_like(x_new), z_new, class_labels_new))
+
+        # Save to file
+        np.savetxt(filename, interpolated_points, fmt="%.6f")
+        print(f"Saved interpolated data to {filename}")
+
+        return interpolated_points
 
     def convert_to_open3d(self, points):
         pcd = o3d.geometry.PointCloud()
