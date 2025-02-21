@@ -41,67 +41,38 @@ MAPPED_LABEL_IDX = {
 }
 
 
-def orient_point_cloud(data: np.ndarray, point1, point2, output_prefix="oriented_"):
+# Orientation function
+def orient_point_cloud(data: np.ndarray, point1, point2):
     coords = data[:, :3]  # Extract x, y, z
-    if data.shape[1] == 3:
-        rgb = np.zeros_like(coords)
-    else:
-        rgb = data[:, 3:]  # Extract r, g, b
+    rgb = data[:, 3:] if data.shape[1] > 3 else np.zeros_like(coords)
 
-    # Convert input points to numpy arrays
     p1 = np.array(point1)
     p2 = np.array(point2)
 
-    # Compute the new x-axis
-    v_x = p2 - p1
+    v_x = p2[:2] - p1[:2]  # Only x and y
+    v_x = np.append(v_x, 0)  # Ensure z component is 0
     v_x = v_x / np.linalg.norm(v_x)  # Normalize
-
-    print("\n[DEBUG] New x-axis (v_x):", v_x)
-
-    # Choose a temporary vector for the cross product (must not be parallel to v_x)
-    v_t = np.array([0, 0, 1])  # Arbitrary vector
-    if np.allclose(np.abs(v_x), np.abs(v_t)):  # Ensure v_t is not parallel
-        v_t = np.array([0, 1, 0])
-
-    # Compute the new y-axis (v_y)
-    v_y = np.cross(v_t, v_x)
-    v_y = v_y / np.linalg.norm(v_y)  # Normalize
-
-    # Compute the new z-axis (v_z)
-    v_z = np.cross(v_x, v_y)
-    v_z = v_z / np.linalg.norm(v_z)  # Normalize
-
-    # print("\n[DEBUG] New y-axis (v_y):", v_y)
-    # print("\n[DEBUG] New z-axis (v_z):", v_z)
+    v_y = np.array([-v_x[1], v_x[0], 0])  # 90-degree rotation in XY plane
+    v_z = np.array([0, 0, 1])
 
     # Create the rotation matrix
     R = np.vstack([v_x, v_y, v_z]).T  # Columns are the new basis vectors
 
-    # print("\n[DEBUG] Rotation matrix:\n", R)
-
-    # Translate the point cloud so that p1 becomes the origin
     translated_coords = coords - p1
-
-    # Debug: Check translation correctness
-    # print("\n[DEBUG] Translated point 1 (should be 0,0,0):", translated_coords[0])
-
-    # Rotate the translated point cloud
     oriented_coords = np.dot(translated_coords, R)
-
-    # Combine oriented coordinates with RGB
+    oriented_coords[:, 2] = coords[:, 2]  # Keep original Z
     oriented_data = np.hstack([oriented_coords, rgb])
 
     # Compute transformed points
-    p1_translated = p1 - p1  # Always [0, 0, 0] after translation
-    p2_translated = p2 - p1
-    p1_rotated = np.dot(R, p1_translated)
-    p2_rotated = np.dot(R.T, p2_translated)
+    p1_transformed = np.array([0, 0, p1[2]])  # Keep original Z
+    p2_transformed = np.dot(R.T, (p2 - p1))
+    p2_transformed[2] = p2[2]  # Keep original Z for p2
 
     # Debug output for transformed points
-    print("\n[DEBUG] Transformed Point 1:", p1_rotated)
-    print("\n[DEBUG] Transformed Point 2:", p2_rotated)
+    print("\n[DEBUG] Transformed Start Point:", p1_transformed)
+    print("\n[DEBUG] Transformed End Point:", p2_transformed)
 
-    return oriented_data, p1_rotated, p2_rotated
+    return oriented_data, p1_transformed, p2_transformed
 
 
 # Normalization functions
@@ -155,18 +126,6 @@ def label_points_by_color(points_rgb, COLOR_VALUES):
     """Labels points based on their RGB values by finding the closest predefined color."""
     distances = cdist(points_rgb, COLOR_VALUES, metric="euclidean")
     return np.argmin(distances, axis=1)
-
-
-# Extract points based on start and end coordinate
-# def interpolate_start_end(start_point, end_point, num=500):
-#     """Interpolates between the start and end points."""
-#     x_start, y_start, z_start = start_point
-#     x_end, y_end, z_end = end_point
-#     x = np.linspace(x_start, x_end, num=num)
-#     y = np.linspace(y_start, y_end, num=num)
-#     # z = np.linspace(z_start, z_end, num=num)
-#     # save_point_cloud(np.stack((x, y), axis=-1), "interpolated_points.txt")
-#     return np.stack((x, y), axis=-1)
 
 
 def get_points(points, start_point, end_point, threshold=0.025, batch_size=10000):
@@ -230,24 +189,19 @@ def classify_points(data) -> dict:
     current_class_label = None
     group_counter = 1  # Used to give unique group names
 
-    # Iterate through the data
     for i, point in enumerate(data):
-        # Extract the current point's class label
         color = tuple(point[3:6])
         label_name = None
 
-        # Find the label name corresponding to the color
         for key, mapped_idx in MAPPED_LABEL_IDX.items():
             mapped_color = COLOR_LABELS[mapped_idx][1]
             if color == tuple(mapped_color):
                 label_name = key
                 break
 
-        # If label_name is not found, skip the point
         if label_name is None:
             continue
 
-        # Check if we are still in the same group
         if (
             (label_name == current_class_label)
             or (label_name in LANE_GROUP and current_class_label in LANE_GROUP)
@@ -256,8 +210,6 @@ def classify_points(data) -> dict:
 
             current_group.append(point)
         else:
-
-            # If we are switching groups, save the current group
             if current_group:
                 group_name = f"{current_class_label}_{group_counter}"
                 classified_points[group_name] = np.array(current_group)
@@ -267,7 +219,6 @@ def classify_points(data) -> dict:
             current_class_label = label_name
             current_group = [point]
 
-    # Save the last group
     if current_group:
         group_name = f"{current_class_label}_{group_counter}"
         classified_points[group_name] = np.array(current_group)
@@ -285,12 +236,10 @@ def get_mesh_points(
     Return the points at uniform spacing along a line from start_point to end_point,
     ensuring they are interpolated on the mesh surface.
     """
-    # Create the point cloud and mesh
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points[:, :3])
     pcd.colors = o3d.utility.Vector3dVector(points[:, 3:6] / 255)
 
-    # Use only XY coordinates for triangulation
     pcd_xy = np.asarray(pcd.points)[:, :2]
     tri = Delaunay(pcd_xy)  # 2D Delaunay triangulation
 
@@ -299,12 +248,10 @@ def get_mesh_points(
     mesh.triangles = o3d.utility.Vector3iVector(tri.simplices)
     mesh.compute_vertex_normals()
 
-    # Convert mesh to tensor format
     mesh = o3d.t.geometry.TriangleMesh.from_legacy(mesh)
     mesh_vertices = mesh.vertex["positions"].numpy()
     mesh_triangles = tri.simplices  # Triangle indices
 
-    # Compute direction and uniform spacing
     los_direction = end_point - start_point
     los_direction /= np.linalg.norm(los_direction)
     distance = np.linalg.norm(end_point - start_point)
@@ -321,7 +268,7 @@ def get_mesh_points(
         if simplex >= 0:
             a, b, c = mesh_vertices[mesh_triangles[simplex]]
             # Compute Barycentric coordinates
-            v0, v1, v2 = b - a, c - a, p - a
+            v0, v1, v2 = b - a, c - a, np.array([p[0] - a[0], p[1] - a[1], 0])
             d00 = np.dot(v0, v0)
             d01 = np.dot(v0, v1)
             d11 = np.dot(v1, v1)
@@ -344,6 +291,48 @@ def get_mesh_points(
     filtered_points[:, 1] = 0
 
     return filtered_points
+
+
+def get_interpolated_points(method_name, points):
+    """Interpolator Options: CubicSpline, PCHIP, Akima"""
+    x = points[:, 0]  # X coordinates
+    z = points[:, 2]  # Z coordinates
+    if points.shape[1] > 3:
+        class_labels = points[:, 3:]
+    else:
+        class_labels = np.zeros((points.shape[0], 3))
+
+    sorted_indices = np.argsort(x)
+    x_sorted = x[sorted_indices]
+    z_sorted = z[sorted_indices]
+    class_labels_sorted = class_labels[sorted_indices]
+
+    # Generate new points at every 0.05 interval
+    x_new = np.arange(x_sorted.min(), x_sorted.max() + 0.05, 0.05)
+
+    # Apply the selected interpolation method
+    if method_name.lower() == "pchip":
+        interpolator = PchipInterpolator(x_sorted, z_sorted)
+    elif method_name.lower() == "cubicspline":
+        interpolator = CubicSpline(x_sorted, z_sorted, bc_type="clamped")
+    elif method_name.lower() == "akima":
+        interpolator = Akima1DInterpolator(x_sorted, z_sorted)
+
+    z_new = interpolator(x_new)
+
+    # Assign class labels using nearest-neighbor approach
+    indices = np.searchsorted(x_sorted, x_new, side="left")
+    indices = np.clip(
+        indices, 0, len(x_sorted) - 1
+    )  # Ensure indices stay within bounds
+    class_labels_new = class_labels_sorted[indices]
+
+    # Combine into a single array (x, y=0, z, class_labels)
+    interpolated_points = np.column_stack(
+        (x_new, np.zeros_like(x_new), z_new, class_labels_new)
+    )
+
+    return interpolated_points
 
 
 # Calculation Function
@@ -381,75 +370,44 @@ def save_point_cloud(points, output_file):
     print(f"Filtered point cloud data saved to {output_file}")
 
 
-"""
-Test Case:
-    # start_point, end_point = 
-    #   [709627.33624268, 5648709.33099365, 1018.97027588], 
-    #   [709677.22576904, 5648693.19976807, 1018.35424805]
+def print_iri(points, output_file=None):
+    if output_file is not None:
+        np.savetxt(output_file, points, fmt="%.6f")
+    print()
+    print("[Total number of filtered points]", len(points))
+    print()
+    classified_points = classify_points(points)
+    for label, data in classified_points.items():
+        num_points = len(data)  # Get the number of rows in the NumPy array
+        iri_value = calculate_iri(data)
+        print(f"IRI: {iri_value}")
 
-    # start_point, end_point = 
-    #   [709655.119271, 5648717.076043, 1019.693002], 
-    #   [709654.937500, 5648695.00000, 1018.645020]
-    # start point, end point = 
-    [709627.621765, 5648712.299011,1019.054260],
-    [ 709677.142029, 5648699.590759, 1018.554016]
-"""
-def interpolate_and_save(method_name, x_sorted, z_sorted, class_labels_sorted, filename):
-        """Applies interpolation (Cubic Spline or PCHIP), assigns class labels, and saves the interpolated data."""
-        
-        print(f"---------------------- {method_name} Interpolation ----------------------")
-
-        # Generate new points at every 0.05 interval
-        x_new = np.arange(x_sorted.min(), x_sorted.max() + 0.05, 0.05)
-
-        # Apply the selected interpolation method
-        if method_name.lower() == "pchip":
-            interpolator = PchipInterpolator(x_sorted, z_sorted)
-        elif method_name.lower() == "cubicspline":
-            interpolator = CubicSpline(x_sorted, z_sorted, bc_type='clamped')
-        elif method_name.lower() == "akima":
-            interpolator = Akima1DInterpolator(x_sorted, z_sorted)
-
-        z_new = interpolator(x_new)
-
-        # if use_pchip:
-        #     # Apply median filter for smoothing (only for PCHIP)
-        # z_new = median_filter(z_new, size=3)
-
-        # # Clip extreme values
-        # z_min, z_max = z_sorted.min(), z_sorted.max()
-        # z_new = np.clip(z_new, z_min, z_max)
-
-        # Assign class labels using nearest-neighbor approach
-        indices = np.searchsorted(x_sorted, x_new, side="left")
-        indices = np.clip(indices, 0, len(x_sorted) - 1)  # Ensure indices stay within bounds
-        class_labels_new = class_labels_sorted[indices]
-
-        # Combine into a single array (x, y=0, z, class_labels)
-        interpolated_points = np.column_stack((x_new, np.zeros_like(x_new), z_new, class_labels_new))
-
-        # Save to file
-        np.savetxt(filename, interpolated_points, fmt="%.6f")
-        print(f"Saved interpolated data to {filename}")
-
-        return interpolated_points
-
-def print_iri(points):
-        classified_points = classify_points(points)
-
-        for label, data in classified_points.items():
-            num_points = len(data)  # Get the number of rows in the NumPy array
-            print(f"{label}: {num_points} points")
-
-            np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
-
-            iri_value = calculate_iri(data)
-            print(f"IRI: {iri_value}")
+        ### OPTIONAL: Save the classified points to a file
+        # print(f"{label}: {num_points} points")
+        # np.savetxt(f"points_{label}.txt", data, fmt="%.6f")
 
 
 def main():
-    # file_path = input("Enter the file path: ")
-    file_path = "combined_00215N_R1R1_18000_20000_section_8.txt"
+    """
+    Tests:
+        # start_point = ast.literal_eval(input("Enter the start point: "))
+        # end_point = ast.literal_eval(input("Enter the end point: "))
+        # start_point = [709676.562500, 5648699.000000, 1018.541992]
+        # end_point = [709629.062500, 5648710.500000, 1019.014526]
+
+        # start_point =  [709627.33624268, 5648709.33099365, 1018.97027588]
+        # end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
+
+        # start_point = [709627.621765, 5648712.299011, 1019.054260]
+        # end_point = [709677.142029, 5648699.590759, 1018.554016]
+
+        # # # vertical
+        # start_point = [709655.119271, 5648717.076043, 1019.693002]
+        # end_point = [709654.937500, 5648695.00000, 1018.645020]
+    """
+    file_path = input("Enter the file path: ")
+    ### TEST: Comment top, uncomment below
+    # file_path = "combined_00215N_R1R1_18000_20000_section_8.txt"
     if not os.path.isfile(file_path):
         print("Invalid file path.")
         return
@@ -460,93 +418,44 @@ def main():
         print(f"Failed to load data from {file_path}")
         return
 
-    # start_point = ast.literal_eval(input("Enter the start point: "))
-    # end_point = ast.literal_eval(input("Enter the end point: "))
-    # start_point = [709676.562500, 5648699.000000, 1018.541992]
-    # end_point = [709629.062500, 5648710.500000, 1019.014526]
-
-    # start_point =   [709627.33624268, 5648709.33099365, 1018.97027588]
-    # end_point = [709677.22576904, 5648693.19976807, 1018.35424805]
-
-    start_point = [709627.621765, 5648712.299011, 1019.054260]
-    end_point = [709677.142029, 5648699.590759, 1018.554016]
-
-    # # # vertical
-    # start_point = [709655.119271, 5648717.076043, 1019.693002]
-    # end_point = [709654.937500, 5648695.00000, 1018.645020]
+    orig_start_point = ast.literal_eval(
+        input("Enter the start point [start_x, start_y, start_z]: ")
+    )
+    orig_end_point = ast.literal_eval(
+        input("Enter the end point [end_x, end_y, end_z]: ")
+    )
+    ### TEST: Comment top, uncomment below
+    # orig_start_point = [709628.4969, 5648707.5704, 1]
+    # orig_end_point = [709673.4494, 5648695.5671, 1]
 
     # orienting the data by defining a new x axis
     oriented_data, start_point, end_point = orient_point_cloud(
-        data, start_point, end_point
+        data, orig_start_point, orig_end_point
     )
     print("start end ", start_point, end_point)
 
-    # print(oriented_data)
+    ### OPTIONAL: Save the oriented data
+    output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
+    np.savetxt(output_file, oriented_data, fmt="%.6f")
 
-    # save as txt? (optional)
-    # output_file = f"{'oriented_'}{file_path.split('/')[-1]}"
-    # np.savetxt(output_file, oriented_data, fmt="%.6f")
-
+    print("---------------------- Points ----------------------")
     # now, we can filter points
     filtered_points = get_points(oriented_data, start_point, end_point)
-    # output_file = f"{'newpoints_'}{file_path.split('/')[-1]}"
-    output_file = "filtered_points.txt"
-    np.savetxt(output_file, filtered_points, fmt="%.6f")
-    print()
-    print("[Total number of filtered points]", len(filtered_points))
-    print()
+    output_file = f"points_{orig_start_point}_{orig_end_point}.txt"
+    print_iri(filtered_points, output_file)
 
+    print("---------------------- Mesh ----------------------")
     filtered_points_mesh = get_mesh_points(
         oriented_data, start_point, end_point, uniform_spacing=0.05
     )
-    output_file = "filtered_points_mesh.txt"
-    np.savetxt(output_file, filtered_points, fmt="%.6f")
-    print()
-    print("[Total number of filtered points]", len(filtered_points))
-    print()
+    output_file = f"mesh_{orig_start_point}_{orig_end_point}.txt"
+    print_iri(filtered_points_mesh, output_file)
 
-    # classifying the points
-    classified_points = classify_points(filtered_points)
-    classified_points_mesh = classify_points(filtered_points_mesh)
-    # pp.pprint(f"{point}: {classified_points[point]}")
-    print("---------------------- Points ----------------------")
-    for label, data in classified_points.items():
-        num_points = len(data)  # Get the number of rows in the NumPy array
-        print(f"{label}: {num_points} points")
+    print("---------------------- PChip ----------------------")
+    filtered_points_inter_pchip = get_interpolated_points("pchip", filtered_points)
+    output_file = f"pchip_{orig_start_point}_{orig_end_point}.txt"
+    print_iri(filtered_points_inter_pchip, output_file)
 
-        np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
-
-        iri_value = calculate_iri(data)
-        print(f"IRI: {iri_value}")
-        # pp.pprint(data)
-    print("---------------------- Mesh ----------------------")
-    for label, data in classified_points_mesh.items():
-        num_points = len(data)  # Get the number of rows in the NumPy array
-        print(f"{label}: {num_points} points")
-
-        np.savetxt(f"saved_data{label}_mesh.txt", data, fmt="%.6f")
-
-        iri_value = calculate_iri(data)
-        print(f"IRI: {iri_value}")
-
-    x = filtered_points[:, 0]  # X coordinates
-    z = filtered_points[:, 2]  # Z coordinates
-    class_labels = filtered_points[:, 3:]  # RGB/class labels
-
-    sorted_indices = np.argsort(x)
-    x_sorted = x[sorted_indices]
-    z_sorted = z[sorted_indices]
-    class_labels_sorted = class_labels[sorted_indices]
-
-    # Apply and save Cubic Spline interpolation
-    interpolated_points_cs = interpolate_and_save("CubicSpline", x_sorted, z_sorted, class_labels_sorted, "interpolated_points.txt")
-    print_iri(interpolated_points_cs)
-
-    # Apply and save PCHIP interpolation (better for noisy data)
-    interpolated_points_pchip = interpolate_and_save("pchip", x_sorted, z_sorted, class_labels_sorted, "interpolated_points_pchip.txt")
-    print_iri(interpolated_points_pchip)
-
-    
 
 if __name__ == "__main__":
     main()

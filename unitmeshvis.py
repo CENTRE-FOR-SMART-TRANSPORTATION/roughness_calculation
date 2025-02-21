@@ -98,5 +98,5 @@ class PointCloudMeshViewer:
 
 
 if __name__ == "__main__":
-    filename = "combined_00215N_R1R1_18000_20000_section_8.txt"  # Change this to your actual file
+    filename = "oriented_combined_00215N_R1R1_18000_20000_section_8.txt"  # Change this to your actual file
     PointCloudMeshViewer(filename)

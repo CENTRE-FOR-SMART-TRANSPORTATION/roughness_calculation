@@ -2,13 +2,8 @@ import open3d as o3d
 import open3d.visualization.gui as gui
 import open3d.visualization.rendering as rendering
 import roughness as r
-import os
 import numpy as np
 import platform
-import sys
-from scipy.interpolate import CubicSpline, PchipInterpolator
-from scipy.ndimage import median_filter
-
 
 isMacOS = platform.system() == "Darwin"
 
@@ -56,28 +51,17 @@ class PointCloudApp:
 
             menu = gui.Menu()
             if isMacOS:
-                # macOS will name the first menu item for the running application
-                # (in our case, probably "Python"), regardless of what we call
-                # it. This is the application menu, and it is where the
-                # About..., Preferences..., and Quit menu items typically go.
                 menu.add_menu("Example", app_menu)
                 menu.add_menu("File", file_menu)
-                # Don't include help menu unless it has something more than
-                # About...
             else:
                 menu.add_menu("File", file_menu)
                 menu.add_menu("Help", help_menu)
             gui.Application.instance.menubar = menu
 
-        # The menubar is global, but we need to connect the menu items to the
-        # window, so that the window can call the appropriate function when the
-        # menu item is activated.
         w.set_on_menu_item_activated(PointCloudApp.MENU_OPEN, self._on_menu_open)
         w.set_on_menu_item_activated(PointCloudApp.MENU_EXPORT, self._on_menu_export)
         w.set_on_menu_item_activated(PointCloudApp.MENU_QUIT, self._on_menu_quit)
         w.set_on_menu_item_activated(PointCloudApp.MENU_ABOUT, self._on_menu_about)
-
-        # self.setup_buttons()
 
     def get_selected_points(self):
         return self._selected_points
@@ -93,108 +77,44 @@ class PointCloudApp:
             oriented, start_point, end_point = r.orient_point_cloud(
                 points, start_point, end_point
             )
-            # filtered_pcd = r.get_mesh_points(oriented, start_point, end_point)
-            filtered_points = r.get_points(oriented, start_point, end_point)
-            np.savetxt(f"filtered_points.txt", filtered_points, fmt="%.6f")
-            filtered_points_mesh = r.get_mesh_points(oriented, start_point, end_point)
+
             print("-------------------Points-------------------")
-            self.print_iri(filtered_points)
+            filtered_points = r.get_points(oriented, start_point, end_point)
+            output_file = f"points_{start_point}_{end_point}.txt"
+            r.print_iri(filtered_points, output_file)
+
             print("-------------------Mesh-------------------")
-            self.print_iri(filtered_points_mesh)
+            filtered_points_mesh = r.get_mesh_points(oriented, start_point, end_point)
+            output_file = f"mesh_{start_point}_{end_point}.txt"
+            r.print_iri(filtered_points_mesh, output_file)
 
-            # Method#3: Points + Cubic Spline
-            x = filtered_points[:, 0]  # X coordinates
-            z = filtered_points[:, 2]  # Z coordinates
-            class_labels = filtered_points[:, 3:]  # RGB/class labels
-
-            sorted_indices = np.argsort(x)
-            x_sorted = x[sorted_indices]
-            z_sorted = z[sorted_indices]
-            class_labels_sorted = class_labels[sorted_indices]
-
-            # Apply and save Cubic Spline interpolation
-            interpolated_points_cs = self.interpolate_and_save("Cubic Spline", x_sorted, z_sorted, class_labels_sorted, "interpolated_points.txt")
-
-            # Apply and save PCHIP interpolation (better for noisy data)
-            interpolated_points_pchip = self.interpolate_and_save("PCHIP", x_sorted, z_sorted, class_labels_sorted, "interpolated_points_pchip.txt", use_pchip=True)
-
-            # Print results
-            self.print_iri(interpolated_points_cs)
-            self.print_iri(interpolated_points_pchip)
-
-
+            print("-------------------PChip-------------------")
+            filtered_points_inter_pchip = r.get_interpolated_points(
+                "pchip", filtered_points
+            )
+            output_file = f"pchip_{start_point}_{end_point}.txt"
+            r.print_iri(filtered_points_inter_pchip, output_file)
 
             filtered_pcd = self.convert_to_open3d(filtered_points)
             filtered_pcd_mesh = self.convert_to_open3d(filtered_points_mesh)
+            filtered_pcd_inter_pchip = self.convert_to_open3d(
+                filtered_points_inter_pchip
+            )
             print(filtered_points.shape)
             print(filtered_points_mesh.shape)
+            print(filtered_points_inter_pchip.shape)
 
             self.point_cloud = self.convert_to_open3d(oriented)
             self.clear_geometries()
             self.add_geometry("PointCloud", self.point_cloud)
             self.add_geometry("FilteredPointCloud", filtered_pcd)
             self.add_geometry("FilteredPointCloudMesh", filtered_pcd_mesh)
+            self.add_geometry("FilteredPointCloudInterPchip", filtered_pcd_inter_pchip)
             save_point_cloud_to_txt(filtered_pcd, "filtered_line_pcd")
             save_point_cloud_to_txt(filtered_pcd_mesh, "filtered_line_pcd_mesh")
-
-    def print_iri(self, points):
-        classified_points = r.classify_points(points)
-
-        for label, data in classified_points.items():
-            num_points = len(data)  # Get the number of rows in the NumPy array
-            print(f"{label}: {num_points} points")
-
-            np.savetxt(f"saved_data{label}.txt", data, fmt="%.6f")
-
-            iri_value = r.calculate_iri(data)
-            print(f"IRI: {iri_value}")
-
-    #   def setup_buttons(self):
-    #     layout = gui.VGrid(2, 0.25 * self.em)
-
-    #     # Button for loading a new point cloud
-    #     load_button = gui.Button("Load Point Cloud")
-    #     load_button.set_on_clicked(self.load_point_cloud)
-    #     layout.add_child(load_button)
-
-    #     self.window.add_child(layout)
-    def interpolate_and_save(self, method_name, x_sorted, z_sorted, class_labels_sorted, filename, use_pchip=False):
-        """Applies interpolation (Cubic Spline or PCHIP), assigns class labels, and saves the interpolated data."""
-        
-        print(f"---------------------- {method_name} Interpolation ----------------------")
-
-        # Generate new points at every 0.05 interval
-        x_new = np.arange(x_sorted.min(), x_sorted.max() + 0.05, 0.05)
-
-        # Apply the selected interpolation method
-        if use_pchip:
-            interpolator = PchipInterpolator(x_sorted, z_sorted)
-        else:
-            interpolator = CubicSpline(x_sorted, z_sorted, bc_type='natural')
-
-        z_new = interpolator(x_new)
-
-        if use_pchip:
-            # Apply median filter for smoothing (only for PCHIP)
-            z_new = median_filter(z_new, size=3)
-
-            # Clip extreme values
-            z_min, z_max = z_sorted.min(), z_sorted.max()
-            z_new = np.clip(z_new, z_min, z_max)
-
-        # Assign class labels using nearest-neighbor approach
-        indices = np.searchsorted(x_sorted, x_new, side="left")
-        indices = np.clip(indices, 0, len(x_sorted) - 1)  # Ensure indices stay within bounds
-        class_labels_new = class_labels_sorted[indices]
-
-        # Combine into a single array (x, y=0, z, class_labels)
-        interpolated_points = np.column_stack((x_new, np.zeros_like(x_new), z_new, class_labels_new))
-
-        # Save to file
-        np.savetxt(filename, interpolated_points, fmt="%.6f")
-        print(f"Saved interpolated data to {filename}")
-
-        return interpolated_points
+            save_point_cloud_to_txt(
+                filtered_pcd_inter_pchip, "filtered_line_pcd_inter_pchip"
+            )
 
     def convert_to_open3d(self, points):
         pcd = o3d.geometry.PointCloud()
@@ -245,31 +165,17 @@ class PointCloudApp:
         gui.Application.instance.quit()
 
     def _on_menu_about(self):
-        # Show a simple dialog. Although the Dialog is actually a widget, you can
-        # treat it similar to a Window for layout and put all the widgets in a
-        # layout which you make the only child of the Dialog.
         em = self.window.theme.font_size
         dlg = gui.Dialog("About")
-
-        # Add the text
         dlg_layout = gui.Vert(em, gui.Margins(em, em, em, em))
         dlg_layout.add_child(gui.Label("Roughness calculator"))
-
-        # Add the Ok button. We need to define a callback function to handle
-        # the click.
         ok = gui.Button("OK")
         ok.set_on_clicked(self._on_about_ok)
-
-        # We want the Ok button to be an the right side, so we need to add
-        # a stretch item to the layout, otherwise the button will be the size
-        # of the entire row. A stretch item takes up as much space as it can,
-        # which forces the button to be its minimum size.
         h = gui.Horiz()
         h.add_stretch()
         h.add_child(ok)
         h.add_stretch()
         dlg_layout.add_child(h)
-
         dlg.add_child(dlg_layout)
         self.window.show_dialog(dlg)
 
@@ -307,20 +213,10 @@ class PointCloudApp:
         if event.type == gui.MouseEvent.Type.BUTTON_DOWN and event.is_modifier_down(
             gui.KeyModifier.CTRL
         ):
-            # # Use the scene to get clicked point
-            # clicked_point = self._scene.scene.pick(event.x, event.y)
-            # if clicked_point.geometry_id == "PointCloud":
-            #     self.selected_points.append(clicked_point.world_point)
-            #     print(f"Selected point: {clicked_point.world_point}")
+
             def depth_callback(depth_image):
-                # Coordinates are expressed in absolute coordinates of the
-                # window, but to dereference the image correctly we need them
-                # relative to the origin of the widget. Note that even if the
-                # scene widget is the only thing in the window, if a menubar
-                # exists it also takes up space in the window (except on macOS).
                 x = event.x - self._scene.frame.x
                 y = event.y - self._scene.frame.y
-                # Note that np.asarray() reverses the axes.
                 depth = np.asarray(depth_image)[y, x]
 
                 if depth == 1.0:  # clicked on nothing (i.e. the far plane)
@@ -338,16 +234,6 @@ class PointCloudApp:
                     )
                     print(f"Selected point: {text}")
                     self.set_selected_points(world)
-
-                # This is not called on the main thread, so we need to
-                # post to the main thread to safely access UI items.
-                def update_label():
-                    self.info.text = text
-                    self.info.visible = text != ""
-                    # We are sizing the info label to be exactly the right size,
-                    # so since the text likely changed width, we need to
-                    # re-layout to set the new frame.
-                    self.window.set_needs_layout()
 
             self._scene.scene.scene.render_to_depth_image(depth_callback)
             return gui.Widget.EventCallbackResult.HANDLED
@@ -385,35 +271,6 @@ class PointCloudApp:
             self.add_geometry(name, geometry)
 
 
-def visualize_point_cloud(point_cloud):
-    """
-    Opens a new window to visualize the given point cloud.
-    Args:
-        point_cloud: An instance of open3d.geometry.PointCloud
-    """
-    if not isinstance(point_cloud, o3d.geometry.PointCloud):
-        print("The provided object is not a valid point cloud.")
-        return
-
-    # Check if the point cloud has points
-    if len(point_cloud.points) == 0:
-        print("The point cloud is empty.")
-        return
-
-    # Visualize the point cloud
-    o3d.visualization.draw_geometries(
-        [point_cloud],
-        window_name="Point Cloud Visualization",
-        width=800,
-        height=600,
-        left=50,
-        top=50,
-        point_show_normal=False,
-        mesh_show_wireframe=False,
-        mesh_show_back_face=False,
-    )
-
-
 def save_point_cloud_to_txt(point_cloud, file_name):
     """
     Save the points in a point cloud to a .txt file.
@@ -422,12 +279,6 @@ def save_point_cloud_to_txt(point_cloud, file_name):
         point_cloud: An open3d.geometry.PointCloud or open3d.cuda.pybind.geometry.PointCloud object.
         file_name: The name of the .txt file to save the points.
     """
-    # if not isinstance(
-    #     point_cloud, (o3d.geometry.PointCloud, o3d.cuda.pybind.geometry.PointCloud)
-    # ):
-    #     raise TypeError("The provided object is not a valid Open3D PointCloud.")
-
-    # Extract points as a numpy array
     if isinstance(point_cloud, o3d.t.geometry.PointCloud):
         o3d.t.io.write_point_cloud(f"{file_name}.ply", point_cloud, write_ascii=True)
     else:
