@@ -1,2 +1,5 @@
 *txt
 *.ply
+/data
+/output
+__pycache__
